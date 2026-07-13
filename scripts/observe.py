@@ -48,6 +48,22 @@ CATEGORY_ICONS = {
 
 # ── 数据层 ────────────────────────────────────────────────────────
 
+def _safe_ts(ts_str):
+    """安全解析 ISO 时间戳，失败返回 Min"""
+    try:
+        return datetime.fromisoformat(ts_str)
+    except (ValueError, TypeError):
+        return datetime.min
+
+
+def _safe_int(val, default=5):
+    """安全转 int，失败返回 default"""
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
+
 def _ensure_data():
     os.makedirs(DATA_DIR, exist_ok=True)
     if not os.path.exists(DATA_FILE):
@@ -62,16 +78,17 @@ def _load():
 
 
 def _save(data):
-    _ensure_data()
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def add_observation(content, category="other", intensity=5, tags=None):
     """添加一条观察记录"""
+    if not isinstance(intensity, int):
+        intensity = 5
     data = _load()
     record = {
-        "id": uuid.uuid4().hex[:8],
+        "id": uuid.uuid4().hex[:12],
         "timestamp": datetime.now().isoformat(),
         "category": category if category in CATEGORIES else "other",
         "content": content.strip(),
@@ -91,7 +108,7 @@ def list_observations(category=None, days=None, limit=50):
     # 时间过滤
     if days is not None:
         cutoff = datetime.now() - timedelta(days=days)
-        obs = [o for o in obs if datetime.fromisoformat(o["timestamp"]) >= cutoff]
+        obs = [o for o in obs if _safe_ts(o["timestamp"]) >= cutoff]
 
     # 类别过滤
     if category:
@@ -107,7 +124,7 @@ def stats(days=30):
     cutoff = datetime.now() - timedelta(days=days)
     data = _load()
     obs = [o for o in data["observations"]
-           if datetime.fromisoformat(o["timestamp"]) >= cutoff]
+           if _safe_ts(o["timestamp"]) >= cutoff]
 
     # 总览
     total = len(obs)
@@ -140,7 +157,7 @@ def stats(days=30):
 
     # 每日记录数（检测行为模式）
     daily_counts = Counter(
-        datetime.fromisoformat(o["timestamp"]).strftime("%Y-%m-%d")
+        _safe_ts(o["timestamp"]).strftime("%Y-%m-%d")
         for o in obs
     )
 
@@ -200,7 +217,7 @@ def cmd_add(args):
             category = args[i + 1]
             i += 2
         elif args[i] == "--intensity" and i + 1 < len(args):
-            intensity = int(args[i + 1])
+            intensity = _safe_int(args[i + 1], 5)
             i += 2
         elif args[i] == "--tags" and i + 1 < len(args):
             tags = [t.strip() for t in args[i + 1].split(",") if t.strip()]
@@ -226,10 +243,10 @@ def cmd_list(args):
             category = args[i + 1]
             i += 2
         elif args[i] == "--days" and i + 1 < len(args):
-            days = int(args[i + 1])
+            days = _safe_int(args[i + 1])
             i += 2
         elif args[i] == "--limit" and i + 1 < len(args):
-            limit = int(args[i + 1])
+            limit = _safe_int(args[i + 1], 50)
             i += 2
         else:
             i += 1

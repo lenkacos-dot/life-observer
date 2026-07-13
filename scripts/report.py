@@ -21,7 +21,6 @@
 import json
 import os
 import sys
-import math
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 
@@ -66,19 +65,49 @@ NEGATIVE_WORDS = ["焦虑", "烦躁", "难过", "生气", "愤怒", "失望", "�
 
 # ── 数据加载 ──────────────────────────────────────────────────────
 
-def load_observations(days=30):
+def _word_in_text(word, text):
+    """精确词匹配：确保 word 不被否定词前置（如"不累"不匹配"累"）"""
+    idx = text.find(word)
+    while idx != -1:
+        # 检查前面是否有否定词
+        before = text[max(0, idx - 1):idx]
+        if before != "不" and before != "没" and before != "无":
+            return True
+        idx = text.find(word, idx + 1)
+    return False
+
+
+def _safe_ts(ts_str):
+    """安全解析 ISO 时间戳"""
+    try:
+        return datetime.fromisoformat(ts_str)
+    except (ValueError, TypeError):
+        return datetime.min
+
+
+def _load_data():
+    """安全加载 JSON 数据"""
     if not os.path.exists(DATA_FILE):
         return []
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        print("⚠️ 数据文件损坏，返回空数据")
+        return []
+    return data.get("observations", [])
+
+
+def load_observations(days=30):
+    obs = _load_data()
     cutoff = datetime.now() - timedelta(days=days)
-    obs = []
-    for o in data.get("observations", []):
-        ts = datetime.fromisoformat(o["timestamp"])
+    filtered = []
+    for o in obs:
+        ts = _safe_ts(o.get("timestamp", ""))
         if ts >= cutoff:
-            obs.append(o)
-    obs.sort(key=lambda o: o["timestamp"])
-    return obs
+            filtered.append(o)
+    filtered.sort(key=lambda o: o.get("timestamp", ""))
+    return filtered
 
 
 # ── 分析引擎 ──────────────────────────────────────────────────────
@@ -95,8 +124,8 @@ def analyze_emotions(obs):
     neutral = 0
     for o in emotion_obs:
         text = o["content"]
-        pos_count = sum(1 for w in POSITIVE_WORDS if w in text)
-        neg_count = sum(1 for w in NEGATIVE_WORDS if w in text)
+        pos_count = sum(1 for w in POSITIVE_WORDS if _word_in_text(w, text))
+        neg_count = sum(1 for w in NEGATIVE_WORDS if _word_in_text(w, text))
         if pos_count > neg_count:
             positive += 1
         elif neg_count > pos_count:
@@ -218,10 +247,9 @@ def analyze_relationships(obs):
 
 def analyze_correlations(obs):
     """相关性分析：情绪 ↔ 消费 / 关系 / 健康 之间的关联"""
-    from collections import defaultdict
 
     def date_key(o):
-        return datetime.fromisoformat(o["timestamp"]).strftime("%Y-%m-%d")
+        return _safe_ts(o.get("timestamp", "")).strftime("%Y-%m-%d")
 
     daily = defaultdict(list)
     for o in obs:
@@ -495,11 +523,9 @@ def print_trend(days=60):
         return
 
     # 按周分组
-    weekly = defaultdict(lambda: {"total": 0, "emotion": 0, "spend": 0,
-                                   "relationship": 0, "avg_intensity": 0,
-                                   "intensities": []})
+    weekly = defaultdict(lambda: {"total": 0, "intensities": []})
     for o in obs:
-        ts = datetime.fromisoformat(o["timestamp"])
+        ts = _safe_ts(o.get("timestamp", ""))
         week_start = ts - timedelta(days=ts.weekday())
         week_key = week_start.strftime("%m-%d")
         weekly[week_key]["total"] += 1
@@ -515,12 +541,10 @@ def print_trend(days=60):
         bar = "█" * min(w["total"], 30)
         print(f"  {wk}  {bar}  {w['total']}条  (强度{avg_i}/10)")
         details = []
-        if w.get("emotion"):
-            details.append(f"情绪{w['emotion']}")
-        if w.get("spend"):
-            details.append(f"消费{w['spend']}")
-        if w.get("relationship"):
-            details.append(f"关系{w['relationship']}")
+        for cat_key, (cat_label, _) in CATEGORIES.items():
+            cnt = w.get(cat_key, 0)
+            if cnt:
+                details.append(f"{cat_label}{cnt}")
         if details:
             print(f"       {' | '.join(details)}")
     print()
